@@ -43,6 +43,8 @@ tauri-plugin-svelte = "3"
 tauri-plugin-os = "2"
 chrono-tz = "0.10.4"
 reqwest = { version = "0.12", features = ["json"] }
+anyhow = "1.0.100"
+pnet_datalink = "0.35.0"
 
 [dependencies.blueprotobuf-lib]
 path = "./src/blueprotobuf-lib"

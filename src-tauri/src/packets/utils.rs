@@ -39,6 +39,7 @@ fn ip_to_str(ip: &[u8; 4]) -> String {
     format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
 }
 
+#[derive(Default)]
 pub struct TCPReassembler {
     pub cache: BTreeMap<usize, Vec<u8>>, // sequence -> payload
     pub next_seq: Option<usize>,         // next expected sequence
@@ -46,14 +47,6 @@ pub struct TCPReassembler {
 }
 
 impl TCPReassembler {
-    pub fn new() -> Self {
-        Self {
-            cache: BTreeMap::new(),
-            next_seq: None,
-            _data: Vec::new(),
-        }
-    }
-
     // // Push a TCP segment and try to reassemble contiguous data.
     // /// Returns Some(Vec<u8>) if contiguous data is available, None otherwise.
     // pub fn push_segment(&mut self, packet: TcpSlice) -> Option<(usize, Vec<u8>)> {
