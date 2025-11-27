@@ -11,7 +11,7 @@ BPSR Logs is a "blazingly fast" open source Blue Protocol: Star Resonance DPS me
 
 https://github.com/winjwinj/bpsr-logs/releases/latest
 
-\*currently only Windows 7 and up is supported
+\*Windows 7+ and Linux are supported
 
 # Is it bannable?
 
@@ -66,7 +66,6 @@ https://discord.com/channels/1417447600608510015/1417450802561290280
 # FAQ
 
 ## Table of Contents
-- [Missing `WinDivert64.sys`](#q-missing-windivert64sys)
 - [Meter isn't detecting anything...](#q-meter-isnt-detecting-anything)
 - [ExitLag? Other ping reducers?](#q-how-do-i-also-use-exitlag-and-other-ping-reducers)
 - [Meter window is missing / meter window is tiny](#q-meter-window-is-missing--meter-window-is-tiny)
@@ -77,13 +76,9 @@ https://discord.com/channels/1417447600608510015/1417450802561290280
 - [There are too many/too few columns in the meter.](#q-there-are-too-manytoo-few-columns-in-the-meter)
 - [Help, my issue isn't listed here](#q-help-my-issue-isnt-listed-here-or-youve-tried-all-these-solutions-and-it-still-doesnt-work)
 
-### Q: Missing `WinDivert64.sys`
-
-A: You need to reinstall meter. The meter uses the WinDivert driver to listen to game packets. You either removed the file or your antivirus removed it. Please create an exception for the entire meter folder, and then reinstall the meter. After reinstalling, you should restart your computer before launching meter.
-
 ### Q: Meter isn't detecting anything...
 
-A: There can be multiple reasons. If you have NordVPN installed, meter will not work due to both apps using WinDivert. You need to uninstall Nord, or completely quit the Nord processes and reboot.
+A: There can be multiple reasons. On Linux, make sure libpcap is installed and you have the necessary permissions to capture packets (typically requires `sudo` or being in the `wireshark` group). On Windows, ensure no other packet capture tools (like NordVPN) are interfering.
 
 ### Q: How do I also use ExitLag (and other ping reducers)?
 

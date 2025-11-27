@@ -1,14 +1,14 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use etherparse::{NetSlice::Ipv4, SlicedPacket, TransportSlice::Tcp};
 use log::{debug, error, info, warn};
 use once_cell::sync::OnceCell;
-use pnet_datalink::{self, Channel::Ethernet, NetworkInterface};
+use pnet_datalink::{self, NetworkInterface};
 use tauri::async_runtime;
 use tokio::sync::{
     mpsc::{self, Receiver, Sender},
     watch,
 };
-use windivert::{WinDivert, prelude::WinDivertFlags};
+use pcap::Capture;
 
 use crate::packets::{
     opcodes::Pkt,
@@ -19,7 +19,7 @@ use crate::packets::{
 // Global sender for restart signal
 static RESTART_SENDER: OnceCell<watch::Sender<bool>> = OnceCell::new();
 
-pub fn start_windivert_capture() -> Receiver<(Pkt, Vec<u8>)> {
+pub fn start_pcap_capture_main() -> Receiver<(Pkt, Vec<u8>)> {
     let (packet_sender, packet_receiver) = mpsc::channel::<(Pkt, Vec<u8>)>(1);
     let (restart_sender, mut restart_receiver) = watch::channel(false);
     RESTART_SENDER.set(restart_sender.clone()).ok();
@@ -33,7 +33,6 @@ pub fn start_windivert_capture() -> Receiver<(Pkt, Vec<u8>)> {
             // Reset signal to false before next loop
             let _ = restart_sender.send(false);
         }
-        // info!("oopsies {}", line!());
     });
     packet_receiver
 }
@@ -43,32 +42,71 @@ async fn read_packets(
     packet_sender: &Sender<(Pkt, Vec<u8>)>,
     restart_receiver: &mut watch::Receiver<bool>,
 ) {
-    let windivert = match WinDivert::network(
-        "!loopback && ip && tcp", // todo: idk why but filtering by port just crashes the program, investigate?
-        0,
-        WinDivertFlags::new().set_sniff(),
-    ) {
-        Ok(windivert_handle) => {
-            info!("WinDivert handle opened!");
-            Some(windivert_handle)
-        }
-        Err(e) => {
-            error!("Failed to initialize WinDivert: {}", e);
+    // Find the first non-loopback interface
+    let interface = match pnet_datalink::interfaces()
+        .into_iter()
+        .find(|e| !e.is_loopback())
+    {
+        Some(iface) => iface,
+        None => {
+            error!("No suitable network interface found");
             return;
         }
-    }
-    .expect("Failed to initialize WinDivert"); // if windivert doesn't work just exit early - todo: maybe we want to log this with a match so its clearer?
-    let mut windivert_buffer = vec![0u8; 10 * 1024 * 1024];
+    };
+
+    info!("Starting packet capture on interface: {}", interface.name);
+
+    // Create libpcap capture
+    let mut capture = match Capture::from_device(interface.name.as_str()) {
+        Ok(cap) => cap,
+        Err(e) => {
+            error!("Failed to create capture device: {}", e);
+            return;
+        }
+    };
+
+    // Set timeout to 1 second
+    capture = capture.timeout(1000);
+
+    // Open the capture
+    let mut capture = match capture.open() {
+        Ok(cap) => cap,
+        Err(e) => {
+            error!("Failed to open capture: {}", e);
+            return;
+        }
+    };
+
+    info!("libpcap handle opened successfully!");
+
     let mut packet_handler = PacketHandler::default();
-    while let Ok(packet) = windivert.recv(Some(&mut windivert_buffer)) {
-        packet_handler
-            .handle_packet(packet_sender, &packet.data, HandleFrom::Ip)
-            .await;
+    loop {
+        match capture.next_packet() {
+            Ok(data) => {
+                packet_handler
+                    .handle_packet(packet_sender, &data, HandleFrom::Ethernet)
+                    .await;
+            }
+            Err(pcap::Error::TimeoutExpired) => {
+                // Timeout is normal, check if we should restart
+                if *restart_receiver.borrow() {
+                    break;
+                }
+                continue;
+            }
+            Err(e) => {
+                warn!("Error reading packet: {:?}", e);
+                if *restart_receiver.borrow() {
+                    break;
+                }
+                continue;
+            }
+        }
+
         if *restart_receiver.borrow() {
             break;
         }
-    } // todo: if it errors, it breaks out of the loop but will it ever error?
-    // info!("{}", line!());
+    }
 }
 
 // Function to send restart signal from another thread/task
@@ -79,7 +117,6 @@ pub fn request_restart() {
 }
 
 enum HandleFrom {
-    Ip,
     Ethernet,
 }
 
@@ -94,15 +131,12 @@ impl PacketHandler {
         &mut self,
         packet_sender: &Sender<(Pkt, Vec<u8>)>,
         data: &[u8],
-        from: HandleFrom,
+        _from: HandleFrom,
     ) {
         // info!("{}", line!());
-        let sliced_packet_result = match from {
-            HandleFrom::Ip => SlicedPacket::from_ip(data),
-            HandleFrom::Ethernet => SlicedPacket::from_ethernet(data),
-        };
+        let sliced_packet_result = SlicedPacket::from_ethernet(data);
         let Ok(sliced_packet) = sliced_packet_result else {
-            return; // if it's not ip, go next packet
+            return; // if it's not ethernet, go next packet
         };
         // info!("{}", line!());
         let Some(Ipv4(ip_packet)) = sliced_packet.net else {
@@ -297,57 +331,11 @@ impl PacketHandler {
     }
 }
 
-pub fn get_interfaces() -> Vec<NetworkInterface> {
-    return pnet_datalink::interfaces();
-}
+// pub fn get_interfaces() -> Vec<NetworkInterface> {
+//     pnet_datalink::interfaces()
+// }
 
-pub fn start_pcap_capture(interface: Option<NetworkInterface>) -> Result<Receiver<(Pkt, Vec<u8>)>> {
-    let interface = match interface {
-        Some(interface) => interface,
-        None => {
-            // get first non-loopback interface
-            let default_interface = pnet_datalink::interfaces()
-                .into_iter()
-                .find(|e| !e.is_loopback());
-            match default_interface {
-                Some(interface) => interface,
-                None => bail!("No suitable default interface found"),
-            }
-        }
-    };
-
-    let (sender, receiver) = mpsc::channel(1);
-
-    async_runtime::spawn(async move {
-        info!("Started capture thread on {:?}", interface.name);
-
-        let (_tx, mut rx) = match pnet_datalink::channel(&interface, Default::default()) {
-            Ok(Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => {
-                warn!("Unhandled channel type");
-                return;
-            }
-            Err(e) => {
-                error!("Error creating datalink channel: {:?}", e);
-                return;
-            }
-        };
-
-        let mut packet_handler = PacketHandler::default();
-        loop {
-            let packet = match rx.next() {
-                Ok(packet) => packet,
-                Err(e) => {
-                    warn!("Error reading packet: {:?}", e);
-                    continue;
-                }
-            };
-
-            packet_handler
-                .handle_packet(&sender, packet, HandleFrom::Ethernet)
-                .await;
-        }
-    });
-
-    Ok(receiver)
+pub fn start_pcap_capture(_interface: Option<NetworkInterface>) -> Result<Receiver<(Pkt, Vec<u8>)>> {
+    // Unified libpcap implementation works for both Windows and Linux
+    Ok(start_pcap_capture_main())
 }

@@ -5,7 +5,6 @@ mod packets;
 use crate::build_app::build;
 use crate::live::opcodes_models::EncounterMutex;
 use log::{info, warn};
-use std::process::Command;
 
 use crate::live::commands::{disable_blur, enable_blur};
 use tauri::menu::MenuBuilder;
@@ -24,9 +23,7 @@ pub const WINDOW_MAIN_LABEL: &str = "main";
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
         info!("App crashed! Info: {info:?}");
-        info!("Unloading and removing windivert...");
-        stop_windivert();
-        remove_windivert();
+        info!("Cleaning up resources...");
     }));
 
     let builder = Builder::<tauri::Wry>::new()
@@ -62,8 +59,6 @@ pub fn run() {
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             info!("starting app v{}", app.package_info().version);
-            stop_windivert();
-            remove_windivert();
 
             // Check app updates
             // https://v2.tauri.app/plugin/updater/#checking-for-updates
@@ -102,42 +97,9 @@ pub fn run() {
     build(tauri_builder).expect("error while running tauri application")
                         .run(|_app_handle, event| { // https://stackoverflow.com/questions/77856626/close-tauri-window-without-closing-the-entire-app
                             if let tauri::RunEvent::ExitRequested { /* api, */ .. } = event {
-                                stop_windivert();
                                 info!("App is closing! Cleaning up resources...");
                             }
                         });
-}
-
-#[allow(unused)]
-fn start_windivert() {
-    let status = Command::new("sc")
-        .args(["create", "windivert", "type=", "kernel", "binPath=", "WinDivert64.sys", "start=", "demand"])
-        .status();
-    if status.is_ok_and(|status| status.success()) {
-        info!("started driver");
-    } else {
-        warn!("could not execute command to stop driver");
-    }
-}
-
-fn stop_windivert() {
-    let status = Command::new("sc").args(["stop", "windivert"]).status();
-    if status.is_ok_and(|status| status.success()) {
-        info!("stopped driver");
-    } else {
-        warn!("could not execute command to stop driver");
-    }
-}
-
-fn remove_windivert() {
-    let status = Command::new("sc")
-        .args(["delete", "windivert", "start=", "demand"])
-        .status();
-    if status.is_ok_and(|status| status.success()) {
-        info!("deleted driver");
-    } else {
-        warn!("could not execute command to delete driver");
-    }
 }
 
 #[cfg(not(debug_assertions))]
@@ -262,7 +224,6 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 }
             }
             "quit" => {
-                stop_windivert();
                 tray_app.exit(0);
             }
             _ => {}
